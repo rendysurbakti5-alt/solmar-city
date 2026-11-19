@@ -1,79 +1,91 @@
-// The screenshot scenes behind ?shot=start|play|end. Each one plays the real rules forward from a
-// fresh world for a fixed number of steps, steered by a simple autopilot (look ahead each way the
-// paddle could move, keep clear of blocks, chase the lowest coin when that is safe), so the frame
-// is what a short game really looks like and the same seed always gives the same frame.
-import { FIELD, PLAYER, STEP } from './config.js';
-import { EVENT_OVER, KIND_BLOCK } from './world.js';
-import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+// The screenshot scenes behind ?shot=drive|foot|chase|mission. Each one stages the real game
+// with its debug hooks — a car placed on an avenue, pedestrians on the promenade, police and
+// wanted heat for the chase, a mission's opening talk at the club — then runs the simulation
+// forward with scripted inputs, so the frame is a moment the game itself produced and the
+// same seed always gives the same frame.
+import { STEP } from './config.js';
 
-const START_SECONDS = 5;
-const PLAY_SECONDS = 26;
-const END_LIMIT_SECONDS = 600;
-/**
- * How far ahead, in seconds, the autopilot checks each way it could move: the play scene's pilot
- * looks well ahead and keeps all its lives; the end scene's looks only a moment ahead, so it is
- * caught out once the blocks speed up, as a hurried player is.
- */
-const HORIZON_PLAY = 0.7;
-const HORIZON_END = 0.25;
-const SAMPLE = 1 / 30;
-const DIRECTIONS = [0, -1, 1];
-/** Extra room, each side, it keeps between the paddle and a block. */
-const MARGIN = 10;
+const IDLE = {
+  moveX: 0,
+  moveY: 0,
+  run: false,
+  throttle: 0,
+  steer: 0,
+  handbrake: false,
+  attackPressed: false,
+  attackHeld: false,
+  interactPressed: false,
+  confirmPressed: false,
+  aimX: 0,
+  aimY: 0,
+};
 
-/** Seconds until moving in `direction` (-1, 0, 1) runs the paddle into a block; Infinity when it never does. */
-function timeToHit(state, direction, horizon) {
-  const player = state.player;
-  for (let t = SAMPLE; t <= horizon; t += SAMPLE) {
-    const x = Math.min(FIELD.width - player.width, Math.max(0, player.x + direction * PLAYER.speed * t));
-    for (let index = 0; index < state.items.length; index += 1) {
-      const item = state.items[index];
-      if (!item.active || item.kind !== KIND_BLOCK) continue;
-      const y = item.y + item.speed * t;
-      if (y + item.height > player.y && y < player.y + player.height && item.x < x + player.width + MARGIN && item.x + item.width > x - MARGIN) return t;
-    }
-  }
-  return Infinity;
+function run(game, seconds, input) {
+  const steps = Math.round(seconds / STEP);
+  for (let i = 0; i < steps; i += 1) game.step(STEP, typeof input === 'function' ? input(i) : input);
 }
 
-/** Of the safe ways to move, the one toward the lowest coin (or the centre); else the one that is hit last. */
-function autopilot(state, horizon) {
-  const player = state.player;
-  let coin = null;
-  for (let index = 0; index < state.items.length; index += 1) {
-    const item = state.items[index];
-    if (item.active && item.kind !== KIND_BLOCK && (coin === null || item.y > coin.y)) coin = item;
-  }
-  const target = coin === null ? FIELD.width / 2 : coin.x + coin.width / 2;
-  const centre = player.x + player.width / 2;
-  const wanted = target > centre + 8 ? 1 : target < centre - 8 ? -1 : 0;
-  let best = wanted;
-  let bestTime = timeToHit(state, wanted, horizon);
-  for (let index = 0; index < DIRECTIONS.length && bestTime !== Infinity; index += 1) {
-    const time = timeToHit(state, DIRECTIONS[index], horizon);
-    if (time > bestTime) {
-      bestTime = time;
-      best = DIRECTIONS[index];
-    }
-  }
-  return best;
+/** Downtown at midday: Santi driving an Aurora GT south through traffic on the third avenue. */
+function stageDrive(game) {
+  const { stage, city } = game;
+  const avenueX = city.avenueCenters[2];
+  const hero = stage.seatInNewCar('gt', avenueX - 32, 1250, Math.PI / 2);
+  hero.color = '#ff5d3b';
+  stage.addTraffic('cub', avenueX - 32, 1750, Math.PI / 2);
+  stage.addTraffic('cab', avenueX + 32, 1900, -Math.PI / 2);
+  stage.addTraffic('van', avenueX - 32, 2350, Math.PI / 2);
+  stage.addTraffic('sedan', city.avenueCenters[1] + 32, 1560, -Math.PI / 2);
+  stage.addTraffic('cub', 1560, city.streetCenters[2] + 32, 0);
+  stage.addPed(avenueX - 90, 1330);
+  stage.addPed(avenueX + 95, 1620);
+  run(game, 3.4, { ...IDLE, throttle: 1 });
+}
+
+/** The promenade: Santi on foot among the strollers, the beach and the sea behind him. */
+function stageFoot(game) {
+  const { stage } = game;
+  stage.placePlayer(2310, 3110);
+  const spots = [
+    [2240, 3080], [2380, 3140], [2450, 3060], [2180, 3160],
+    [2520, 3120], [2290, 3180], [2410, 3200], [2560, 3060],
+  ];
+  for (const [x, y] of spots) stage.addPed(x, y);
+  run(game, 2.4, (i) => ({ ...IDLE, moveX: i < 90 ? 1 : 0, moveY: i < 90 ? 0.25 : 0 }));
+}
+
+/** Four stars over Portside: an Aurora GT running north with the Interceptors closing in. */
+function stageChase(game) {
+  const { stage, city } = game;
+  const avenueX = city.avenueCenters[4];
+  const car = stage.seatInNewCar('gt', avenueX + 32, 2750, -Math.PI / 2);
+  car.color = '#ff5d3b';
+  stage.setHeat(100);
+  stage.addPolice(avenueX + 32, 3120, -Math.PI / 2);
+  stage.addPolice(avenueX - 32, 3300, -Math.PI / 2);
+  stage.addPolice(avenueX - 330, city.streetCenters[3], 0);
+  stage.addTraffic('van', avenueX - 32, 2050, Math.PI / 2);
+  stage.addTraffic('cub', avenueX + 32, 1750, -Math.PI / 2);
+  run(game, 2.3, (i) => ({ ...IDLE, throttle: 1, steer: Math.sin(i * 0.06) * 0.045 }));
+}
+
+/** A job begins: Paloma's opening talk for the Aurora job, outside Club Palma. */
+function stageMission(game) {
+  const { stage, city } = game;
+  const door = city.pois.club.door;
+  stage.placePlayer(door.x - 26, door.y + 30);
+  stage.addPed(door.x + 90, door.y + 46);
+  stage.addPed(door.x - 130, door.y + 20);
+  stage.startMissionAt(2);
+  run(game, 0.4, IDLE);
 }
 
 /**
- * Set `world` to the named scene (start, play or end; any other name is start) and return the
- * screen to draw over it and the best score to show.
+ * Set the game to the named scene and return nothing: the caller paints the frame.
+ * Any other name stages the drive, the game's most complete single view.
  */
-export function stageShot(name, world) {
-  world.reset();
-  if (name !== 'play' && name !== 'end') {
-    for (let index = 0; index < START_SECONDS / STEP; index += 1) world.step(STEP, 0, true);
-    return { screen: SCREEN_TITLE, best: 0 };
-  }
-  const limit = name === 'end' ? END_LIMIT_SECONDS : PLAY_SECONDS;
-  const horizon = name === 'end' ? HORIZON_END : HORIZON_PLAY;
-  for (let index = 0; index < limit / STEP; index += 1) {
-    if (world.step(STEP, autopilot(world.state, horizon), false) & EVENT_OVER) break;
-  }
-  const over = world.state.lives === 0;
-  return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: world.state.score };
+export function stageShot(name, game) {
+  if (name === 'foot') stageFoot(game);
+  else if (name === 'chase') stageChase(game);
+  else if (name === 'mission') stageMission(game);
+  else stageDrive(game);
 }
